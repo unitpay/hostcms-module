@@ -155,11 +155,20 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
             $currency = 'RUB';
         }
 
+        $signature = hash('sha256', join('{up}', array(
+            $account,
+            $currency,
+            $desc,
+            $sum,
+            $this->secret_key
+        )));;
+
         $form = '<form name="unitpay" action="https://unitpay.ru/pay/' . $this->public_key . '" method="get">';
         $form .= '<input type="hidden" name="sum" value="' . $sum . '" />';
         $form .= '<input type="hidden" name="account" value="' . $account . '" />';
         $form .= '<input type="hidden" name="desc" value="' . $desc . '" />';
         $form .= '<input type="hidden" name="currency" value="' . $currency . '" />';
+        $form .= '<input type="hidden" name="signature" value="' . $signature . '" />';
         $form .= '<input class="button" type="submit" value="Оплатить">';
         $form .= '</form>';
 
