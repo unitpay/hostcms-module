@@ -2,6 +2,7 @@
 
 class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
 {
+    protected $domain = '';
     protected $public_key = '';
     protected $secret_key = '';
 
@@ -138,6 +139,10 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
      */
     public function getNotification()
     {
+        if (empty($this->domain)) {
+            throw new Exception('domain is empty');
+        }
+
         if (empty($this->public_key)) {
             throw new Exception('public_key is empty');
         }
@@ -163,7 +168,7 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
             $this->secret_key
         )));;
 
-        $form = '<form name="unitpay" action="https://unitpay.ru/pay/' . $this->public_key . '" method="get">';
+        $form = '<form name="unitpay" action="https://' . $this->domain . '/pay/' . $this->public_key . '" method="get">';
         $form .= '<input type="hidden" name="sum" value="' . $sum . '" />';
         $form .= '<input type="hidden" name="account" value="' . $account . '" />';
         $form .= '<input type="hidden" name="desc" value="' . $desc . '" />';
