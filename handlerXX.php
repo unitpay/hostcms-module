@@ -2,20 +2,22 @@
 
 class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
 {
-    protected $domain = '';
     protected $public_key = '';
     protected $secret_key = '';
 
-    protected $currency_name = 'RUB';
+    protected $currency_id = 1;
 
-    // id валюты, в которой будет производиться рассчет суммы
-    protected $currency_id = 1; // 1 - рубли (RUR), 2 - евро (EUR), 3 - доллары (USD), 4 - рубли (RUB)
+    protected $currency_code = "RUB";
 
     public function __construct(Shop_Payment_System_Model $oShop_Payment_System_Model)
     {
         parent::__construct($oShop_Payment_System_Model);
-        $currency = Core_Entity::factory('Shop_Currency')->getByCode($this->currency_name);
-        !is_null($currency) && $this->currency_id = $currency->id;
+
+        $this->currency_id = $oShop_Payment_System_Model->shop_currency_id;
+
+        $currency = Core_Entity::factory('Shop_Currency')->getById($this->currency_id);
+
+        $this->currency_code = $currency->code;
     }
 
     /**
@@ -36,8 +38,8 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
             {
                 // Вызов обработчика платежной системы
                 Shop_Payment_System_Handler::factory($oShop_Order->Shop_Payment_System)
-                    ->shopOrder($oShop_Order)
-                    ->paymentProcessing();
+                        ->shopOrder($oShop_Order)
+                        ->paymentProcessing();
             }
             //для "зеленой лампочки в обработчике"
             $result = array('error' =>
@@ -63,11 +65,11 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
     {
         return Shop_Controller::instance()->round(($this->currency_id > 0
             && $this->_shopOrder->shop_currency_id > 0
-                ? Shop_Controller::instance()->getCurrencyCoefficientInShopCurrency(
-                    $this->_shopOrder->Shop_Currency,
-                    Core_Entity::factory('Shop_Currency', $this->currency_id)
-                )
-                : 0) * $this->_shopOrder->getAmount());
+                    ? Shop_Controller::instance()->getCurrencyCoefficientInShopCurrency(
+                            $this->_shopOrder->Shop_Currency,
+                            Core_Entity::factory('Shop_Currency', $this->currency_id)
+                    )
+                    : 0) * $this->_shopOrder->getAmount());
     }
     protected function _processOrder()
     {
@@ -139,10 +141,6 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
      */
     public function getNotification()
     {
-        if (empty($this->domain)) {
-            throw new Exception('domain is empty');
-        }
-
         if (empty($this->public_key)) {
             throw new Exception('public_key is empty');
         }
@@ -151,10 +149,11 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
             throw new Exception('secret_key is empty');
         }
 
-        $sum = $this->getSumWithCoeff();
+        $orderParams = $this->_orderParams;
+        $sum = number_format($this->getSumWithCoeff(), 2, '.', '');
         $account = $this->_shopOrder->id;
         $desc = 'Оплата по заказу №' . $this->_shopOrder->id;
-        $currency = $this->currency_name;
+        $currency = $this->currency_code;
 
         if ($currency == 'RUR') {
             $currency = 'RUB';
@@ -166,19 +165,80 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
             $desc,
             $sum,
             $this->secret_key
-        )));;
+        )));
 
-        $form = '<form name="unitpay" action="https://' . $this->domain . '/pay/' . $this->public_key . '" method="get">';
+        $aShop_Order_Items = $this->_shopOrder->Shop_Order_Items->findAll(FALSE);
+
+        // Расчет сумм скидок, чтобы потом вычесть из цены каждого товара
+        $discount = $amount = 0;
+        foreach ($aShop_Order_Items as $key => $oShop_Order_Item)
+        {
+            if ($oShop_Order_Item->price < 0)
+            {
+                $discount -= $oShop_Order_Item->getAmount();
+                unset($aShop_Order_Items[$key]);
+            }
+            elseif ($oShop_Order_Item->shop_item_id)
+            {
+                $amount += $oShop_Order_Item->getAmount();
+            }
+        }
+
+        $discount = $amount != 0
+                ? abs($discount) / $amount
+                : 0;
+
+        $items = array();
+
+        foreach ($aShop_Order_Items as $oShop_Order_Item)
+        {
+            if($oShop_Order_Item->getAmount() > 0) {
+                $items[] = array(
+                    'name' => mb_substr($oShop_Order_Item->name, 0, 128),
+                    'count' => $oShop_Order_Item->quantity,
+                    'nds' => $this->getTaxRates($oShop_Order_Item->rate),
+                    'price' => (($oShop_Order_Item->getAmount()/$oShop_Order_Item->quantity) * ($oShop_Order_Item->shop_item_id ? 1 - $discount : 1)),
+                    'currency' => $currency,
+                    'type' => (strpos($oShop_Order_Item->name, 'Доставка') === false ? 'commodity' : 'service'),
+                );
+            }
+        }
+
+        $cashItems = base64_encode(json_encode($items));
+
+        $form = '<form name="unitpay" action="https://unitpay.ru/pay/' . $this->public_key . '" method="get">';
         $form .= '<input type="hidden" name="sum" value="' . $sum . '" />';
         $form .= '<input type="hidden" name="account" value="' . $account . '" />';
         $form .= '<input type="hidden" name="desc" value="' . $desc . '" />';
         $form .= '<input type="hidden" name="currency" value="' . $currency . '" />';
         $form .= '<input type="hidden" name="signature" value="' . $signature . '" />';
+        $form .= '<input type="hidden" name="customerEmail" value="' . $orderParams["email"]. '" />';
+        $form .= '<input type="hidden" name="customerPhone" value="' . preg_replace('/\D/', '', $orderParams["phone"]) . '" />';
+        $form .= '<input type="hidden" name="cashItems" value="' . $cashItems . '" />';
         $form .= '<input class="button" type="submit" value="Оплатить">';
         $form .= '</form>';
 
         return $form;
     }
+
+    public function getTaxRates($rate){
+        switch (intval($rate)){
+            case 10:
+                $vat = 'vat10';
+                break;
+            case 20:
+                $vat = 'vat20';
+                break;
+            case 0:
+                $vat = 'vat0';
+                break;
+            default:
+                $vat = 'none';
+        }
+
+        return $vat;
+    }
+
     public function getInvoice()
     {
         return $this->getNotification();
@@ -203,7 +263,7 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
                 $currency = 'RUB';
             }
 
-            if (!isset($params['orderSum']) || ((float)$total != (float)$params['orderSum'])) {
+            if (!isset($params['orderSum']) || ((float) number_format($total, 2, '.', '') != (float) number_format($params['orderSum'], 2, '.', ''))) {
                 $result = array('error' =>
                     array('message' => 'не совпадает сумма заказа')
                 );
@@ -229,7 +289,7 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
         if (is_null($order->id))
         {
             $result = array('error' =>
-                array('message' => 'заказа не существует')
+                    array('message' => 'заказа не существует')
             );
         }else{
             $total = number_format($this->getSumWithCoeff(), 2, '.', '');
@@ -238,13 +298,13 @@ class Shop_Payment_System_HandlerXX extends Shop_Payment_System_Handler
                 $currency = 'RUB';
             }
 
-            if (!isset($params['orderSum']) || ((float)$total != (float)$params['orderSum'])) {
+            if (!isset($params['orderSum']) || ((float) number_format($total, 2, '.', '') != (float) number_format($params['orderSum'], 2, '.', ''))) {
                 $result = array('error' =>
                     array('message' => 'не совпадает сумма заказа')
                 );
             }elseif (!isset($params['orderCurrency']) || ($currency != $params['orderCurrency'])) {
                 $result = array('error' =>
-                    array('message' => 'не совпадает валюта заказа')
+                        array('message' => 'не совпадает валюта заказа')
                 );
             }
             else{
